@@ -1,0 +1,7 @@
+[general]
+name=3D Viewer
+description=This template is a simple 3D viewer.
+            Ragardless of "Visible on load" layer setting, all exported layers are displayed on page load.
+files=web/js/Qgis2threejs.js,web/css/Qgis2threejs.css,Qgis2threejs.png
+dirs=
+options=

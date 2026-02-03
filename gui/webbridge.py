@@ -1,0 +1,144 @@
+# -*- coding: utf-8 -*-
+# (C) 2016 Minoru Akagi
+# SPDX-License-Identifier: GPL-2.0-or-later
+# begin: 2016-02-10
+
+import base64
+from functools import wraps
+from qgis.PyQt.QtCore import QByteArray, QObject, QVariant, pyqtSignal, pyqtSlot
+from qgis.PyQt.QtGui import QImage
+
+from ..conf import DEBUG_MODE
+from ..utils import logger
+
+
+if DEBUG_MODE:
+    def emit_slotCalled(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            logger.debug("↑ " + func.__name__)
+            return func(*args, **kwargs)
+        return wrapper
+else:
+    def noop_decorator(func):
+        return func
+    emit_slotCalled = noop_decorator
+
+
+class WebBridge(QObject):
+
+    # signals - Python to JS
+    sendData = pyqtSignal(QVariant, bool)           # data, viaQueue
+
+    # signals - Bridge to Python (window, web page, etc.)
+    initialized = pyqtSignal()
+    dataLoaded = pyqtSignal()
+    dataLoadError = pyqtSignal()
+    sceneLoaded = pyqtSignal()
+    scriptFileLoaded = pyqtSignal(int)              # scriptFileId
+    tweenStarted = pyqtSignal(int)
+    animationStopped = pyqtSignal()
+    imageReady = pyqtSignal("QImage", bool)         # image, copy_to_clipboard -> Window
+    modelDataReady = pyqtSignal("QByteArray", str, bool, bool)  # data, filename, is_first, is_last -> Window
+    requestedRenderingFinished = pyqtSignal()       # -> WebPage
+    resized = pyqtSignal(int, int)                  # width, height
+    statusMessage = pyqtSignal(str, int)
+    testResultReceived = pyqtSignal(str, bool, str)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self._storedData = QVariant()
+
+    @pyqtSlot(result="QVariant")
+    def data(self):
+        return self._storedData
+
+    def setData(self, data):
+        self._storedData = QVariant(data)
+
+    @pyqtSlot()
+    @emit_slotCalled
+    def emitInitialized(self):
+        self.initialized.emit()
+
+    @pyqtSlot()
+    @emit_slotCalled
+    def emitDataLoaded(self):
+        self.dataLoaded.emit()
+
+    @pyqtSlot()
+    @emit_slotCalled
+    def emitDataLoadError(self):
+        self.dataLoadError.emit()
+
+    @pyqtSlot()
+    @emit_slotCalled
+    def emitSceneLoaded(self):
+        self.sceneLoaded.emit()
+
+    @pyqtSlot(int)
+    @emit_slotCalled
+    def emitScriptReady(self, scriptFileId):
+        self.scriptFileLoaded.emit(scriptFileId)
+
+    @pyqtSlot(int)
+    @emit_slotCalled
+    def emitTweenStarted(self, index):
+        self.tweenStarted.emit(index)
+
+    @pyqtSlot()
+    @emit_slotCalled
+    def emitAnimationStopped(self):
+        self.animationStopped.emit()
+
+    @pyqtSlot(str, int)
+    @emit_slotCalled
+    def showStatusMessage(self, message, timeout_ms=0):
+        self.statusMessage.emit(message, timeout_ms)
+
+    @pyqtSlot(str, str, bool, bool)
+    @emit_slotCalled
+    def saveBase64(self, b64str, filename, is_first, is_last):
+        self.modelDataReady.emit(base64.b64decode(b64str), filename, is_first, is_last)
+
+    @pyqtSlot(str, str, bool, bool)
+    @emit_slotCalled
+    def saveText(self, text, filename, is_first, is_last):
+        self.modelDataReady.emit(text.encode("UTF-8"), filename, is_first, is_last)
+
+    @pyqtSlot(str)
+    @emit_slotCalled
+    def saveImage(self, dataUrl):
+        image = QImage()
+        if dataUrl:
+            ba = QByteArray.fromBase64(dataUrl[22:].encode("ascii"))
+            image.loadFromData(ba)
+        self.imageReady.emit(image, False)
+
+    @pyqtSlot(str)
+    @emit_slotCalled
+    def copyToClipboard(self, dataUrl):
+        image = QImage()
+        if dataUrl:
+            ba = QByteArray.fromBase64(dataUrl[22:].encode("ascii"))
+            image.loadFromData(ba)
+        self.imageReady.emit(image, True)
+
+    @pyqtSlot()
+    @emit_slotCalled
+    def emitRequestedRenderingFinished(self):
+        self.requestedRenderingFinished.emit()
+
+    @pyqtSlot(str, bool, str)
+    @emit_slotCalled
+    def sendTestResult(self, testName, result, msg):
+        self.testResultReceived.emit(testName, result, msg)
+
+    """
+    @pyqtSlot(int, int, result=str)
+    @notify_slot_called
+    def mouseUpMessage(self, x, y):
+        logger.debug(f"↑ Clicked at ({x}, {y})")
+        # JS side: console.log(pyObj.mouseUpMessage(e.clientX, e.clientY));
+    """

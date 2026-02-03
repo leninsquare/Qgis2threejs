@@ -1,0 +1,166 @@
+# -*- coding: utf-8 -*-
+# (C) 2013 Minoru Akagi
+# SPDX-License-Identifier: GPL-2.0-or-later
+# begin: 2013-12-21
+
+import os
+
+from qgis.PyQt.QtCore import QSettings
+from qgis.PyQt.QtWidgets import QAction, QActionGroup
+from qgis.PyQt.QtGui import QIcon
+from qgis.core import Qgis, QgsApplication, QgsProject
+
+from .conf import DEBUG_MODE, PLUGIN_NAME
+from .core.exportsettings import ExportSettings
+from .core.processing.procprovider import Qgis2threejsProvider
+from .gui.window import Q3DWindow
+from .gui.webview import WEBENGINE_AVAILABLE, WEBKIT_AVAILABLE, WEBVIEWTYPE_NONE, WEBVIEWTYPE_WEBKIT, WEBVIEWTYPE_WEBENGINE
+from .utils import logger, pluginDir, removeTemporaryOutputDir, settingsFilePath
+
+
+class Qgis2threejs:
+
+    PREFER_WEBKIT_SETTING = "/Qgis2threejs/preferWebKit"
+
+    def __init__(self, iface):
+        self.iface = iface
+        self.pprovider = Qgis2threejsProvider()
+
+        self.currentProjectPath = ""
+        self.exportSettings = None
+        self.liveExporter = None
+        self.previewEnabled = True
+
+    def initGui(self):
+        # add a toolbar button
+        icon = QIcon(pluginDir("Qgis2threejs.png"))
+        title = "Qgis2threejs Exporter"
+        wnd = self.iface.mainWindow()
+        objName = "Qgis2threejsExporter"
+
+        self.action = QAction(icon, title, wnd)
+        self.action.setObjectName(objName)
+        self.action.triggered.connect(self.openExporter)
+
+        self.iface.addWebToolBarIcon(self.action)
+
+        # web menu items
+        self.actionGroup = QActionGroup(wnd)
+        self.actionGroup.setObjectName(objName + "Group")
+
+        if Qgis.QGIS_VERSION_INT >= 33600:
+            self.actionWebEng = QAction(icon, title + " (WebEngine)", self.actionGroup)
+            self.actionWebEng.setObjectName(objName + "WebEng")
+            self.actionWebEng.triggered.connect(self.openExporterWebEng)
+
+            self.iface.addPluginToWebMenu(PLUGIN_NAME, self.actionWebEng)
+
+        if WEBKIT_AVAILABLE:
+            self.actionWebKit = QAction(icon, title + " (WebKit)", self.actionGroup)
+            self.actionWebKit.setObjectName(objName + "WebKit")
+            self.actionWebKit.triggered.connect(self.openExporterWebKit)
+
+            self.iface.addPluginToWebMenu(PLUGIN_NAME, self.actionWebKit)
+
+        if Qgis.QGIS_VERSION_INT >= 33600 and WEBKIT_AVAILABLE:
+            if WEBENGINE_AVAILABLE:
+                self.actionWebEng.setCheckable(True)
+
+            self.actionWebKit.setCheckable(True)
+
+            if QSettings().value(self.PREFER_WEBKIT_SETTING, False) or not WEBENGINE_AVAILABLE:
+                self.actionWebKit.setChecked(True)
+            else:
+                self.actionWebEng.setChecked(True)
+
+        # connect signal-slot
+        QgsProject.instance().removeAll.connect(self.allLayersRemoved)
+
+        # register processing provider
+        QgsApplication.processingRegistry().addProvider(self.pprovider)
+
+    def unload(self):
+        # disconnect signal-slot
+        QgsProject.instance().removeAll.disconnect(self.allLayersRemoved)
+
+        # remove the web menu items and icon
+        self.action.triggered.disconnect(self.openExporter)
+        self.iface.removeWebToolBarIcon(self.action)
+
+        if Qgis.QGIS_VERSION_INT >= 33600:
+            self.actionWebEng.triggered.disconnect(self.openExporterWebEng)
+            self.iface.removePluginWebMenu(PLUGIN_NAME, self.actionWebEng)
+
+        if WEBKIT_AVAILABLE:
+            self.actionWebKit.triggered.disconnect(self.openExporterWebKit)
+            self.iface.removePluginWebMenu(PLUGIN_NAME, self.actionWebKit)
+
+        # remove provider from processing registry
+        QgsApplication.processingRegistry().removeProvider(self.pprovider)
+
+        # temporary output directory
+        removeTemporaryOutputDir()
+
+    def openExporter(self, _=False, webViewType=None):
+        """
+        webViewType: WEBVIEWTYPE_NONE, WEBVIEWTYPE_WEBKIT, WEBVIEWTYPE_WEBENGINE or None. None means last used web view type.
+        """
+        if self.liveExporter:
+            logger.info("Qgis2threejs Exporter is already open.")
+            self.liveExporter.activateWindow()
+            return
+
+        needsToUpdateLayers = True
+        proj_path = QgsProject.instance().fileName()
+        if proj_path and proj_path != self.currentProjectPath:
+            filepath = settingsFilePath()   # get settings file path for current project
+            if os.path.exists(filepath):
+                self.exportSettings = ExportSettings()
+                self.exportSettings.loadSettingsFromFile(filepath)
+                needsToUpdateLayers = False
+
+        self.exportSettings = self.exportSettings or ExportSettings()
+        self.exportSettings.isPreview = True
+        self.exportSettings.setMapSettings(self.iface.mapCanvas().mapSettings())
+        if needsToUpdateLayers:
+            self.exportSettings.updateLayers()
+
+        self.liveExporter = Q3DWindow(self.iface,
+                                      self.exportSettings,
+                                      webViewType=webViewType,
+                                      previewEnabled=self.previewEnabled)
+        self.liveExporter.show()
+        self.liveExporter.previewEnabledChanged.connect(self.previewEnabledChanged)
+        self.liveExporter.destroyed.connect(self.exporterDestroyed)
+
+        self.currentProjectPath = proj_path
+
+    def openExporterWebEng(self):
+        if WEBENGINE_AVAILABLE:
+            QSettings().remove(self.PREFER_WEBKIT_SETTING)
+            self.openExporter(webViewType=WEBVIEWTYPE_WEBENGINE)
+        else:
+            self.openExporter(webViewType=WEBVIEWTYPE_NONE)
+
+    def openExporterWebKit(self):
+        self.openExporter(webViewType=WEBVIEWTYPE_WEBKIT)
+
+        if WEBENGINE_AVAILABLE:
+            QSettings().setValue(self.PREFER_WEBKIT_SETTING, True)
+
+    def previewEnabledChanged(self, enabled):
+        self.previewEnabled = enabled
+
+    def exporterDestroyed(self, obj):
+        if DEBUG_MODE:
+            from .utils.debug import logReferenceCount
+            logReferenceCount(self.liveExporter)
+
+        self.liveExporter = None
+
+    def allLayersRemoved(self):
+        if self.liveExporter:
+            return
+
+        self.currentProjectPath = ""
+        self.exportSettings = None
