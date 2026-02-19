@@ -768,7 +768,7 @@ class Q3DWindow(QMainWindow):
 
         button_row = QHBoxLayout()
         capture_btn = QPushButton("Capture screenshots", dialog)
-        capture_arc_btn = QPushButton("Capture right arc (1°)", dialog)
+        capture_arc_btn = QPushButton("Capture right arc (5°)", dialog)
         use_camera_btn = QPushButton("Use current camera", dialog)
         button_row.addWidget(capture_btn)
         button_row.addWidget(capture_arc_btn)
