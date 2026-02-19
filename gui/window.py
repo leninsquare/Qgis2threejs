@@ -770,9 +770,13 @@ class Q3DWindow(QMainWindow):
         capture_btn = QPushButton("Capture screenshots", dialog)
         capture_arc_btn = QPushButton("Capture right arc (5°)", dialog)
         use_camera_btn = QPushButton("Use current camera", dialog)
+        export_params_btn = QPushButton("Export params...", dialog)
+        import_params_btn = QPushButton("Import params...", dialog)
         button_row.addWidget(capture_btn)
         button_row.addWidget(capture_arc_btn)
         button_row.addWidget(use_camera_btn)
+        button_row.addWidget(export_params_btn)
+        button_row.addWidget(import_params_btn)
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
@@ -788,6 +792,13 @@ class Q3DWindow(QMainWindow):
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dialog)
         button_box.rejected.connect(dialog.reject)
         layout.addWidget(button_box)
+
+        def clear_focus_rows():
+            while focus_list.count():
+                item = focus_list.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
 
         def create_focus_row(x=None, y=None, z=None):
             row_widget = QWidget(dialog)
@@ -954,13 +965,98 @@ class Q3DWindow(QMainWindow):
                 return
             self.runScript(payload["script"])
 
+        def import_panorama_params():
+            filename, _ = QFileDialog.getOpenFileName(
+                dialog,
+                "Import Panorama Parameters",
+                QDir.homePath(),
+                "JSON files (*.json);;All files (*)"
+            )
+            if not filename:
+                return
+
+            try:
+                with open(filename, "r", encoding="utf-8") as f:
+                    params = json.load(f)
+            except (OSError, ValueError) as e:
+                QMessageBox.warning(dialog, "Import Panorama Parameters", f"Failed to read file: {e}")
+                return
+
+            camera_pos = params.get("cameraPos") or {}
+            focus_points = params.get("focusPoints") or []
+
+            if not isinstance(camera_pos, dict):
+                QMessageBox.warning(dialog, "Import Panorama Parameters", "Invalid format: cameraPos must be an object.")
+                return
+
+            if not isinstance(focus_points, list):
+                QMessageBox.warning(dialog, "Import Panorama Parameters", "Invalid format: focusPoints must be a list.")
+                return
+
+            try:
+                camera_x.setValue(float(camera_pos.get("x", 0)))
+                camera_y.setValue(float(camera_pos.get("y", 0)))
+                camera_z.setValue(float(camera_pos.get("z", 0)))
+
+                clear_focus_rows()
+
+                for point in focus_points:
+                    if not isinstance(point, dict):
+                        continue
+                    create_focus_row(
+                        float(point.get("x", 0)),
+                        float(point.get("y", 0)),
+                        float(point.get("z", 0))
+                    )
+            except (TypeError, ValueError):
+                QMessageBox.warning(dialog, "Import Panorama Parameters", "Invalid numeric values in parameter file.")
+
+        def export_panorama_params():
+            rows = focus_rows()
+            if not rows:
+                QMessageBox.warning(dialog, "Export Panorama Parameters", "Add at least one focus point.")
+                return
+
+            filename, _ = QFileDialog.getSaveFileName(
+                dialog,
+                "Export Panorama Parameters",
+                QDir.homePath(),
+                "JSON files (*.json);;All files (*)"
+            )
+            if not filename:
+                return
+
+            if not filename.lower().endswith(".json"):
+                filename += ".json"
+
+            params = {
+                "cameraPos": {
+                    "x": camera_x.value(),
+                    "y": camera_y.value(),
+                    "z": camera_z.value()
+                },
+                "focusPoints": [
+                    {"x": fx.value(), "y": fy.value(), "z": fz.value()}
+                    for fx, fy, fz in rows
+                ]
+            }
+
+            try:
+                with open(filename, "w", encoding="utf-8") as f:
+                    json.dump(params, f, ensure_ascii=False, indent=2)
+            except OSError as e:
+                QMessageBox.warning(dialog, "Export Panorama Parameters", f"Failed to save file: {e}")
+
+
         add_focus_btn.clicked.connect(lambda: create_focus_row())
         use_focus_btn.clicked.connect(use_current_focus)
         use_camera_btn.clicked.connect(use_current_camera)
         browse_btn.clicked.connect(browse_output)
         capture_btn.clicked.connect(capture_series)
         capture_arc_btn.clicked.connect(capture_right_arc_series)
-
+        import_params_btn.clicked.connect(import_panorama_params)
+        export_params_btn.clicked.connect(export_panorama_params)
+        
         use_current_camera()
         dialog.show()
 
