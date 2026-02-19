@@ -39,6 +39,7 @@ class WebBridge(QObject):
     tweenStarted = pyqtSignal(int)
     animationStopped = pyqtSignal()
     imageReady = pyqtSignal("QImage", bool)         # image, copy_to_clipboard -> Window
+    imageFileReady = pyqtSignal("QByteArray", str, bool, bool)  # data, filename, is_first, is_last -> Window
     modelDataReady = pyqtSignal("QByteArray", str, bool, bool)  # data, filename, is_first, is_last -> Window
     requestedRenderingFinished = pyqtSignal()       # -> WebPage
     resized = pyqtSignal(int, int)                  # width, height
@@ -106,6 +107,12 @@ class WebBridge(QObject):
     @emit_slotCalled
     def saveText(self, text, filename, is_first, is_last):
         self.modelDataReady.emit(text.encode("UTF-8"), filename, is_first, is_last)
+
+    @pyqtSlot(str, str, bool, bool)
+    @emit_slotCalled
+    def saveImageBase64(self, b64str, filename, is_first, is_last):
+        self.imageFileReady.emit(base64.b64decode(b64str), filename, is_first, is_last)
+
 
     @pyqtSlot(str)
     @emit_slotCalled

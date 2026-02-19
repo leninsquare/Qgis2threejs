@@ -2,15 +2,18 @@
 # (C) 2016 Minoru Akagi
 # SPDX-License-Identifier: GPL-2.0-or-later
 # begin: 2016-02-10
+import json
+import math
 
 import os
 from datetime import datetime
 
-from qgis.PyQt.QtCore import Qt, QDir, QEvent, QObject, QSettings, QUrl, pyqtSignal, pyqtSlot
+from qgis.PyQt.QtCore import Qt, QByteArray, QDir, QEvent, QObject, QSettings, QUrl, pyqtSignal, pyqtSlot
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (QAction, QActionGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                                 QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QMainWindow,
-                                 QMenu, QMessageBox, QProgressBar, QPushButton, QStyle, QToolButton, QVBoxLayout)
+                                 QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+                                 QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QStyle, QToolButton,
+                                 QVBoxLayout, QWidget)
 from qgis.core import Qgis, QgsProject, QgsApplication
 
 from . import webview
@@ -65,6 +68,7 @@ class Q3DWindow(QMainWindow):
         self.controller.statusMessage.connect(self.ui.statusbar.showMessage)
         self.controller.progressUpdated.connect(self.progress)
         self.controller.taskManager.allTasksFinalized.connect(self.hideProgress)
+        self._imageFiles = {}
 
         self._setupMenu(self.ui)
         self._setupStatusBar(self.ui, previewEnabled, viewName)
@@ -75,6 +79,7 @@ class Q3DWindow(QMainWindow):
 
             self.webPage.bridge.modelDataReady.connect(self.saveModelData)
             self.webPage.bridge.imageReady.connect(self.saveImage)
+            self.webPage.bridge.imageFileReady.connect(self.saveImageFileData)
             self.webPage.bridge.statusMessage.connect(self.showStatusMessage)
 
             self.ui.webView.setup(previewEnabled)
@@ -199,6 +204,7 @@ class Q3DWindow(QMainWindow):
         ui.actionSceneSettings.triggered.connect(self.showScenePropertiesDialog)
         ui.actionGroupCamera.triggered.connect(self.cameraChanged)
         ui.actionCameraPosition.triggered.connect(self.showCameraPositionDialog)
+        ui.actionScreenshotSeries.triggered.connect(self.showScreenshotSeriesDialog)
         ui.actionNavigationWidget.toggled.connect(self.navStateChanged)
         ui.actionAddPlane.triggered.connect(self.addPlane)
         ui.actionAddPointCloudLayer.triggered.connect(self.showAddPointCloudLayerDialog)
@@ -210,6 +216,7 @@ class Q3DWindow(QMainWindow):
             ui.actionDevTools.triggered.connect(ui.webView.showDevTools)
         else:
             ui.actionCameraPosition.setEnabled(False)
+            ui.actionScreenshotSeries.setEnabled(False)
         ui.actionAlwaysOnTop.toggled.connect(self.alwaysOnTopToggled)
         ui.actionUsage.triggered.connect(self.usage)
         ui.actionHelp.triggered.connect(openHelp)
@@ -404,6 +411,42 @@ class Q3DWindow(QMainWindow):
 
             image.save(filename)
             self.ui.statusbar.showMessage("Image has been saved to file.", 5000)
+
+    # @pyqtSlot(bytes, str, bool, bool)     # connected to bridge.imageFileReady signal
+    def saveImageFileData(self, data, filename, is_first, is_last):
+        try:
+            filename = os.path.normpath(filename)
+            if isinstance(data, QByteArray):
+                data = bytes(data)
+            if is_first:
+                if filename in self._imageFiles:
+                    self._imageFiles[filename].close()
+
+                directory = os.path.dirname(filename)
+                if directory and not os.path.exists(directory):
+                    os.makedirs(directory, exist_ok=True)
+
+                self._imageFiles[filename] = open(filename, "wb")
+
+            file_obj = self._imageFiles.get(filename)
+            if file_obj is None:
+                file_obj = open(filename, "ab")
+                self._imageFiles[filename] = file_obj
+
+            file_obj.write(data)
+
+            if is_last:
+                file_obj.close()
+                del self._imageFiles[filename]
+                self.ui.statusbar.showMessage(f"Screenshot saved: {filename}", 5000)
+        except Exception as e:
+            self.ui.statusbar.showMessage(f"Failed to save screenshot: {e}", 5000)
+            file_obj = self._imageFiles.pop(filename, None)
+            if file_obj:
+                try:
+                    file_obj.close()
+                except Exception:
+                    pass
 
     def saveAsGLTF(self):
         if not self.ui.checkBoxPreview.isChecked():
@@ -667,6 +710,258 @@ class Q3DWindow(QMainWindow):
         apply_btn.clicked.connect(apply_state)
 
         fill_from_state()
+        dialog.show()
+
+
+    def showScreenshotSeriesDialog(self):
+        if not self.webPage:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Screenshot Series")
+        dialog.setModal(False)
+
+        layout = QVBoxLayout(dialog)
+        form_layout = QFormLayout()
+
+        def create_spinbox():
+            spin = QDoubleSpinBox(dialog)
+            spin.setDecimals(6)
+            spin.setRange(-1e12, 1e12)
+            spin.setSingleStep(1.0)
+            return spin
+
+        camera_x = create_spinbox()
+        camera_y = create_spinbox()
+        camera_z = create_spinbox()
+
+        form_layout.addRow(QLabel("Cam X"), camera_x)
+        form_layout.addRow(QLabel("Cam Y"), camera_y)
+        form_layout.addRow(QLabel("Cam Z"), camera_z)
+
+        output_row = QHBoxLayout()
+        output_dir = QLineEdit(dialog)
+        output_dir.setPlaceholderText("Output folder")
+        browse_btn = QPushButton("Browse...", dialog)
+        output_row.addWidget(output_dir)
+        output_row.addWidget(browse_btn)
+        form_layout.addRow(QLabel("Folder"), output_row)
+
+        base_name = QLineEdit(dialog)
+        base_name.setPlaceholderText("screenshot")
+        base_name.setText("screenshot")
+        form_layout.addRow(QLabel("Base"), base_name)
+
+        layout.addLayout(form_layout)
+
+        focus_header = QHBoxLayout()
+        focus_header.addWidget(QLabel("Focus points"))
+        add_focus_btn = QPushButton("+", dialog)
+        use_focus_btn = QPushButton("Use current focus", dialog)
+        focus_header.addWidget(add_focus_btn)
+        focus_header.addWidget(use_focus_btn)
+        focus_header.addStretch(1)
+        layout.addLayout(focus_header)
+
+        focus_list = QVBoxLayout()
+        layout.addLayout(focus_list)
+
+        button_row = QHBoxLayout()
+        capture_btn = QPushButton("Capture screenshots", dialog)
+        capture_arc_btn = QPushButton("Capture right arc (1°)", dialog)
+        use_camera_btn = QPushButton("Use current camera", dialog)
+        button_row.addWidget(capture_btn)
+        button_row.addWidget(capture_arc_btn)
+        button_row.addWidget(use_camera_btn)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        arc_form = QFormLayout()
+        arc_degrees = QDoubleSpinBox(dialog)
+        arc_degrees.setDecimals(0)
+        arc_degrees.setRange(1, 360)
+        arc_degrees.setSingleStep(5)
+        arc_degrees.setValue(360)
+        arc_form.addRow(QLabel("Arc angle"), arc_degrees)
+        layout.addLayout(arc_form)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dialog)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        def create_focus_row(x=None, y=None, z=None):
+            row_widget = QWidget(dialog)
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+
+            fx = create_spinbox()
+            fy = create_spinbox()
+            fz = create_spinbox()
+            if x is not None:
+                fx.setValue(float(x))
+            if y is not None:
+                fy.setValue(float(y))
+            if z is not None:
+                fz.setValue(float(z))
+
+            remove_btn = QPushButton("×", dialog)
+            remove_btn.setFixedWidth(24)
+
+            row_layout.addWidget(fx)
+            row_layout.addWidget(fy)
+            row_layout.addWidget(fz)
+            row_layout.addWidget(remove_btn)
+
+            def remove_row():
+                focus_list.removeWidget(row_widget)
+                row_widget.deleteLater()
+
+            remove_btn.clicked.connect(remove_row)
+            focus_list.addWidget(row_widget)
+            return fx, fy, fz
+
+        def focus_rows():
+            rows = []
+            for i in range(focus_list.count()):
+                widget = focus_list.itemAt(i).widget()
+                if widget is None:
+                    continue
+                spins = widget.findChildren(QDoubleSpinBox)
+                if len(spins) >= 3:
+                    rows.append(spins[:3])
+            return rows
+
+        def use_current_camera():
+            state = self.controller.cameraState(flat=True) or {}
+            camera_x.setValue(float(state.get("x", 0)))
+            camera_y.setValue(float(state.get("y", 0)))
+            camera_z.setValue(float(state.get("z", 0)))
+
+        def use_current_focus():
+            state = self.controller.cameraState(flat=True) or {}
+            create_focus_row(state.get("fx", 0), state.get("fy", 0), state.get("fz", 0))
+
+        def browse_output():
+            folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", QDir.homePath())
+            if folder:
+                output_dir.setText(folder)
+
+        def resolve_output_path():
+            output_text = ""
+            if output_dir is not None:
+                output_text = output_dir.text().strip()
+            logger.debug(f"Screenshot series output_text: {output_text}")
+            if not output_text:
+                return None
+            # Keep normalized absolute path with forward slashes (works on all platforms and in JS bridge).
+            return os.path.normpath(os.path.abspath(os.path.expanduser(output_text))).replace("\\", "/")
+
+        def create_capture_payload(focus_points):
+            output_path = resolve_output_path()
+            if output_path is None:
+                return None
+
+            camera_pos = {"x": camera_x.value(), "y": camera_y.value(), "z": camera_z.value()}
+            output_path = os.path.abspath(os.path.expanduser(output_dir.text().strip()))
+            output_path = os.path.normpath(output_path)
+            output_path = QDir.toNativeSeparators(output_path)
+            try:
+                os.makedirs(output_path, exist_ok=True)
+            except OSError as e:
+                QMessageBox.warning(dialog, "Screenshot Series", f"Cannot create output folder: {e}")
+                return
+            output_path = output_dir.text().strip()
+            base = base_name.text().strip() or "screenshot"
+
+            script = (
+                "if (typeof captureScreenshotSeries === 'function') {{"
+                "captureScreenshotSeries({}, {}, {}, {});"
+                "}} else {{"
+                "console.error('captureScreenshotSeries is not available');"
+                "if (window.pyObj && pyObj.showStatusMessage) {{"
+                "pyObj.showStatusMessage('Screenshot series is not available in this view.', 5000);"
+                "}}"
+                "}}"
+            ).format(
+                json.dumps(camera_pos),
+                json.dumps(focus_points),
+                json.dumps(output_path),
+                json.dumps(base)
+            )
+            self.runScript(script)
+            return {"script": script, "output_path": output_path}
+        
+        def capture_series():
+            rows = focus_rows()
+            if not rows:
+                QMessageBox.warning(dialog, "Screenshot Series", "Add at least one focus point.")
+                return
+
+            focus_points = []
+            for fx, fy, fz in rows:
+                focus_points.append({"x": fx.value(), "y": fy.value(), "z": fz.value()})
+
+            payload = create_capture_payload(focus_points)
+            if payload is None:
+                QMessageBox.warning(dialog, "Screenshot Series", "Output folder is required.")
+                return
+
+            try:
+                os.makedirs(payload["output_path"], exist_ok=True)
+            except OSError as e:
+                QMessageBox.warning(dialog, "Screenshot Series", f"Cannot create output folder: {e}")
+                return
+            self.runScript(payload["script"])
+
+        def capture_right_arc_series():
+            rows = focus_rows()
+            if not rows:
+                QMessageBox.warning(dialog, "Screenshot Series", "Add at least one focus point.")
+                return
+
+            first_fx, first_fy, first_fz = rows[0]
+            cam_x, cam_y = camera_x.value(), camera_y.value()
+            dx = first_fx.value() - cam_x
+            dy = first_fy.value() - cam_y
+            radius = math.hypot(dx, dy)
+
+            if radius == 0:
+                QMessageBox.warning(dialog, "Screenshot Series", "Initial focus point must differ from camera XY position.")
+                return
+
+            base_angle = math.atan2(dy, dx)
+            z_value = first_fz.value()
+            point_count = int(arc_degrees.value()) + 5
+
+            focus_points = []
+            for step in range(point_count):
+                angle = base_angle - math.radians(step)
+                focus_points.append({
+                    "x": cam_x + radius * math.cos(angle),
+                    "y": cam_y + radius * math.sin(angle),
+                    "z": z_value
+                })
+
+            payload = create_capture_payload(focus_points)
+            if payload is None:
+                QMessageBox.warning(dialog, "Screenshot Series", "Output folder is required.")
+                return
+
+            try:
+                os.makedirs(payload["output_path"], exist_ok=True)
+            except OSError as e:
+                QMessageBox.warning(dialog, "Screenshot Series", f"Cannot create output folder: {e}")
+                return
+            self.runScript(payload["script"])
+
+        add_focus_btn.clicked.connect(lambda: create_focus_row())
+        use_focus_btn.clicked.connect(use_current_focus)
+        use_camera_btn.clicked.connect(use_current_camera)
+        browse_btn.clicked.connect(browse_output)
+        capture_btn.clicked.connect(capture_series)
+        capture_arc_btn.clicked.connect(capture_right_arc_series)
+
+        use_current_camera()
         dialog.show()
 
     def navStateChanged(self, enabled):

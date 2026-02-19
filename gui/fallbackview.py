@@ -57,6 +57,7 @@ class Q3DFallbackView(QWidget):
     def disableWidgetsAndMenus(self, ui):
         objs = [ui.checkBoxPreview, ui.menuSaveAs, ui.actionReload,
                 ui.actionResetCameraPosition, ui.actionCameraPosition,
+                ui.actionScreenshotSeries,
                 ui.actionDevTools, ui.actionUsage]
 
         for obj in objs:

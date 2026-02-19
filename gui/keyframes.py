@@ -489,7 +489,7 @@ class AnimationTreeWidget(QTreeWidget):
 
         icon = None
         if typ == ATConst.ITEM_CAMERA:
-            item.setData(0, ATConst.DATA_CAMERA, keyframe.get("camera") or self.controller.cameraState(flat=True))
+            item.setData(0, ATConst.DATA_CAMERA, keyframe.get("camera") or self.wnd.controller.cameraState(flat=True))
 
         elif typ == ATConst.ITEM_OPACITY:
             item.setData(0, ATConst.DATA_OPACITY, keyframe.get("opacity", 1))

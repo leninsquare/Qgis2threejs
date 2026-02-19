@@ -125,12 +125,13 @@
     </property>
     <widget class="QMenu" name="menuCamera">
      <property name="title">
-      <string>Camera</string>
-     </property>
-     <addaction name="actionPerspective"/>
-     <addaction name="actionOrthographic"/>
-     <addaction name="actionCameraPosition"/>
-    </widget>
+     <string>Camera</string>
+    </property>
+    <addaction name="actionPerspective"/>
+    <addaction name="actionOrthographic"/>
+    <addaction name="actionCameraPosition"/>
+    <addaction name="actionScreenshotSeries"/>
+   </widget>
     <widget class="QMenu" name="menuWidgets">
      <property name="title">
       <string>Widgets</string>
@@ -276,6 +277,11 @@
   <action name="actionCameraPosition">
    <property name="text">
     <string>Camera Position...</string>
+   </property>
+  </action>
+  <action name="actionScreenshotSeries">
+   <property name="text">
+    <string>Screenshot Series...</string>
    </property>
   </action>
   <action name="actionLayer_Panel">

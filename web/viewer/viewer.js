@@ -9,7 +9,12 @@ Q3D.Config.preview = {
 
 };
 
-Q3D.Config.potree.basePath = document.currentScript.src + "/../../js/potree-core";
+var viewerScript = document.currentScript;
+var viewerScriptSrc = (viewerScript && viewerScript.src) ? viewerScript.src : "";
+Q3D.Config.potree.basePath = viewerScriptSrc ? (viewerScriptSrc + "/../../js/potree-core") : "../js/potree-core";
+console.log("[Q3D] viewer.js loading", {src: viewerScriptSrc});
+
+
 Q3D.Config.potree.maxNodesLoading = 1;
 
 var app = Q3D.application,
@@ -32,6 +37,7 @@ var preview = {
 
 //// initialization
 function init(off_screen, debug_mode, qgis_version, is_webengine) {
+	console.log("[Q3D] init", {off_screen: off_screen, debug_mode: debug_mode, qgis_version: qgis_version, is_webengine: is_webengine});
 
 	Q3D.Config.debugMode = debug_mode;
 	Q3D.Config.qgisVersion = qgis_version;
@@ -66,6 +72,7 @@ function init(off_screen, debug_mode, qgis_version, is_webengine) {
 }
 
 function _init(off_screen) {
+	console.log("[Q3D] _init", {off_screen: off_screen});
 
 	var container = Q3D.E("view");
 	app.init(container);
@@ -84,6 +91,8 @@ function _init(off_screen) {
 	}
 
 	app.addEventListener("loadComplete", function () {
+		console.log("[Q3D] loadComplete");
+
 		preview.isDataLoading = false;
 
 		setTimeout(function () {
@@ -97,6 +106,8 @@ function _init(off_screen) {
 	});
 
 	app.addEventListener("sceneLoaded", function () {
+		console.log("[Q3D] sceneLoaded");
+
 		pyObj.emitSceneLoaded();
 	});
 
@@ -143,7 +154,8 @@ function _init(off_screen) {
 		showMessageBar(msg, undefined, true);
 	}
 	initCameraInputControls();
-
+	initScreenshotInputControls();
+	captureScreenshotSeries();
 	pyObj.emitInitialized();
 }
 
@@ -171,7 +183,7 @@ function loadData(data, viaQueue) {
 		}
 	}
 	else if (data.type == "signal") {
-		if (data.name = "queueCompleted") {
+		if (data.name == "queueCompleted") {
 			tasksAndLoadingFinalized(data.success, data.is_scene);
 		}
 	}
@@ -421,6 +433,33 @@ function sendData(is_base64, data, filename, callback) {
     sendNext();
 }
 
+function sendImageBytes(bytes, filename, callback) {
+	sendImageData(bytes, filename, callback);
+}
+
+function sendImageData(data, filename, callback) {
+	const CHUNK_SIZE = 100000;
+	let offset = 0;
+
+	function sendNext() {
+		if (offset >= data.length) {
+			if (callback) callback();
+			return;
+		}
+
+		const chunk = data.slice(offset, offset + CHUNK_SIZE);
+		const isFirst = (offset === 0);
+		const isLast = (offset + CHUNK_SIZE >= data.length);
+
+		pyObj.saveImageBase64(uint8ToBase64(chunk), filename, isFirst, isLast);
+
+		offset += CHUNK_SIZE;
+
+		setTimeout(sendNext, 0);
+	}
+	sendNext();
+}
+
 function requestRendering() {
 	requestAnimationFrame(function () {
 		app.render(true);
@@ -514,7 +553,202 @@ function initCameraInputControls() {
 	}
 }
 
+function captureScreenshotSeries(cameraPos, focusPoints, outputDir, baseName, onDone) {
+	console.log("[Q3D] captureScreenshotSeries", {cameraPos: cameraPos, focusPoints: focusPoints, outputDir: outputDir, baseName: baseName});
 
+	if (!cameraPos || !focusPoints || !focusPoints.length) {
+		showMessageBar("Add at least one focus point.", 3000, true);
+		if (onDone) onDone();
+		return;
+	}
+	if (!outputDir) {
+		showMessageBar("Output folder is required.", 3000, true);
+		if (onDone) onDone();
+		return;
+	}
+
+	var base = baseName || "screenshot";
+	var joinPath = function (dir, filename) {
+		var separator = (dir.indexOf("\\") !== -1) ? "\\" : "/";
+		if (dir.endsWith("/") || dir.endsWith("\\")) return dir + filename;
+		return dir + separator + filename;
+	};
+
+	var captureNext = function (index) {
+		if (index >= focusPoints.length) {
+			showMessageBar("Screenshots saved to " + outputDir + ".", 3000);
+			if (onDone) onDone();
+			return;
+		}
+
+		setCameraState({pos: cameraPos, lookAt: focusPoints[index]});
+
+		requestAnimationFrame(function () {
+			app._saveCanvasImage(app.width, app.height, false, function (canvas) {
+				var dataUrl = canvas.toDataURL("image/png");
+				var bytes = Q3D.Utils.base64ToUint8Array(dataUrl.split(",")[1]);
+				var filename = joinPath(outputDir, base + "_" + (index + 1) + ".png");
+				sendImageBytes(bytes, filename, function () {
+					captureNext(index + 1);
+				});
+			});
+		});
+	};
+
+	captureNext(0);
+};
+console.log("[Q3D] captureScreenshotSeries defined", typeof captureScreenshotSeries);
+
+function initScreenshotInputControls() {
+	var captureBtn = Q3D.E("capturescreenshotsbtn");
+	if (!captureBtn) return;
+	console.log("[Q3D] initScreenshotInputControls");
+
+	var cameraXInput = Q3D.E("screenshot_camera_x");
+	var cameraYInput = Q3D.E("screenshot_camera_y");
+	var cameraZInput = Q3D.E("screenshot_camera_z");
+	var outputDirInput = Q3D.E("screenshot_output_dir");
+	var baseNameInput = Q3D.E("screenshot_basename");
+	var focusList = Q3D.E("screenshot_focus_list");
+	var addFocusBtn = Q3D.E("addfocusbtn");
+	var useCurrentCameraBtn = Q3D.E("usecurrentscreenshotcamerabtn");
+	var useCurrentFocusBtn = Q3D.E("usecurrentfocusbtn");
+
+	var parseInput = function (input, label) {
+		if (!input) return {error: label + " input is missing."};
+		var value = input.value.trim();
+		if (!value) return {error: label + " is required."};
+		var number = parseFloat(value);
+		if (Number.isNaN(number)) return {error: label + " must be a number."};
+		return {value: number};
+	};
+
+	var joinPath = function (dir, filename) {
+		var separator = (dir.indexOf("\\") !== -1) ? "\\" : "/";
+		if (dir.endsWith("/") || dir.endsWith("\\")) return dir + filename;
+		return dir + separator + filename;
+	};
+
+	var addFocusRow = function (values) {
+		if (!focusList) return;
+
+		var row = document.createElement("div");
+		row.className = "screenshot-focus-row";
+
+		var createNumberInput = function (placeholder, value) {
+			var input = document.createElement("input");
+			input.type = "number";
+			input.step = "any";
+			input.placeholder = placeholder;
+			input.className = "camera-input";
+			if (value !== undefined) input.value = value;
+			return input;
+		};
+
+		var xInput = createNumberInput("FX", values && values.x);
+		var yInput = createNumberInput("FY", values && values.y);
+		var zInput = createNumberInput("FZ", values && values.z);
+
+		var removeBtn = document.createElement("button");
+		removeBtn.type = "button";
+		removeBtn.className = "action-btn screenshot-remove-btn";
+		removeBtn.innerHTML = "×";
+		removeBtn.onclick = function () {
+			focusList.removeChild(row);
+		};
+
+		row.appendChild(xInput);
+		row.appendChild(yInput);
+		row.appendChild(zInput);
+		row.appendChild(removeBtn);
+		focusList.appendChild(row);
+	};
+
+	if (addFocusBtn) {
+		addFocusBtn.onclick = function () {
+			addFocusRow();
+		};
+	}
+
+	if (useCurrentFocusBtn) {
+		useCurrentFocusBtn.onclick = function () {
+			var state = cameraState(true);
+			addFocusRow({x: state.fx, y: state.fy, z: state.fz});
+		};
+	}
+
+	if (useCurrentCameraBtn) {
+		useCurrentCameraBtn.onclick = function () {
+			var state = cameraState(true);
+			cameraXInput.value = state.x;
+			cameraYInput.value = state.y;
+			cameraZInput.value = state.z;
+		};
+	}
+
+	captureBtn.onclick = function () {
+		if (!outputDirInput || !baseNameInput || !focusList) return;
+
+		var xValue = parseInput(cameraXInput, "Camera X");
+		if (xValue.error) {
+			showMessageBar(xValue.error, 3000, true);
+			return;
+		}
+
+		var yValue = parseInput(cameraYInput, "Camera Y");
+		if (yValue.error) {
+			showMessageBar(yValue.error, 3000, true);
+			return;
+		}
+
+		var zValue = parseInput(cameraZInput, "Camera Z");
+		if (zValue.error) {
+			showMessageBar(zValue.error, 3000, true);
+			return;
+		}
+
+		var outputDir = outputDirInput.value.trim();
+		if (!outputDir) {
+			showMessageBar("Output folder is required.", 3000, true);
+			return;
+		}
+
+		var baseName = baseNameInput.value.trim() || "screenshot";
+
+		var rows = focusList.querySelectorAll(".screenshot-focus-row");
+		if (!rows.length) {
+			showMessageBar("Add at least one focus point.", 3000, true);
+			return;
+		}
+
+		var focusPoints = [];
+		for (var i = 0; i < rows.length; i++) {
+			var inputs = rows[i].querySelectorAll("input");
+			var fx = parseInput(inputs[0], "Focus X");
+			if (fx.error) {
+				showMessageBar(fx.error, 3000, true);
+				return;
+			}
+			var fy = parseInput(inputs[1], "Focus Y");
+			if (fy.error) {
+				showMessageBar(fy.error, 3000, true);
+				return;
+			}
+			var fz = parseInput(inputs[2], "Focus Z");
+			if (fz.error) {
+				showMessageBar(fz.error, 3000, true);
+				return;
+			}
+			focusPoints.push({x: fx.value, y: fy.value, z: fz.value});
+		}
+
+		var cameraPos = {x: xValue.value, y: yValue.value, z: zValue.value};
+		captureBtn.disabled = true;
+		captureScreenshotSeries(cameraPos, focusPoints, outputDir, baseName, function () {
+			captureBtn.disabled = false;
+		});
+	};
+};
 
 function showStatusMessage(message, timeout_ms) {
 	pyObj.showStatusMessage(message, timeout_ms || 0);
